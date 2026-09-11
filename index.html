@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="theme-color" content="#0d1b40">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest-consulta.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Consulta de Cliente — Aliança Comércio</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, Helvetica, sans-serif;
+    background: #f2f4f8;
+    color: #1a1a2e;
+  }
+
+  /* --- login (Supabase Auth de verdade, mesma conta/senha do resto do ecossistema) --- */
+  #gateLogin, #gateNovaSenha {
+    position: fixed; inset: 0; background: #0d1b40; color: #fff;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; z-index: 9999; text-align: center; padding: 20px;
+  }
+  #gateNovaSenha { display: none; }
+  #gateLogin .titulo, #gateNovaSenha .titulo { font-size: 19px; font-weight: bold; }
+  #gateLogin .sub, #gateNovaSenha .sub { font-size: 13px; color: #b8c0d8; max-width: 280px; }
+  #gateLogin input, #gateNovaSenha input {
+    padding: 14px 16px; border-radius: 8px; border: none; font-size: 17px; width: 240px; text-align: center;
+  }
+  #gateLogin button, #gateNovaSenha button {
+    padding: 14px 22px; border-radius: 8px; border: none; background: #f2b705; color: #0d1b40;
+    font-weight: bold; font-size: 16px; cursor: pointer; width: 240px;
+  }
+  #erroLogin, #erroNovaSenha { color: #ff8a8a; font-size: 13px; display: none; }
+  #msgReset { color: #9ee6a8; font-size: 13px; display: none; max-width: 280px; }
+  #linkEsqueciSenha { color: #b8c0d8; font-size: 12px; text-decoration: underline; }
+
+  /* --- app --- */
+  #conteudo { display: none; min-height: 100vh; }
+  header {
+    background: #0d1b40; color: #fff; padding: 14px 16px; position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 16px; margin: 0 0 2px; }
+  header .meta { font-size: 11px; color: #b8c0d8; }
+
+  #offlineAviso {
+    display: none; background: #8a6300; color: #fff; text-align: center;
+    font-size: 12px; font-weight: bold; padding: 6px; position: sticky; top: 0; z-index: 11;
+  }
+  body.offline #offlineAviso { display: block; }
+
+  main { padding: 14px; max-width: 640px; margin: 0 auto; }
+
+  .searchBox {
+    background: #fff; border-radius: 12px; padding: 14px; box-shadow: 0 1px 4px rgba(0,0,0,.08);
+    margin-bottom: 14px;
+  }
+  .searchBox label { font-size: 12px; color: #667; font-weight: bold; display: block; margin-bottom: 8px; }
+  .modos { display: flex; gap: 6px; margin-bottom: 10px; }
+  .modos button {
+    flex: 1; padding: 10px 6px; border: 2px solid #dde; background: #fff; border-radius: 8px;
+    font-size: 13px; font-weight: bold; color: #556; cursor: pointer;
+  }
+  .modos button.ativo { background: #0d1b40; border-color: #0d1b40; color: #fff; }
+  .searchBox input {
+    width: 100%; padding: 14px 14px; font-size: 20px; border: 2px solid #dde; border-radius: 10px;
+    letter-spacing: 0.5px;
+  }
+  .searchBox input:focus { outline: none; border-color: #0d1b40; }
+  .hint { font-size: 11.5px; color: #889; margin-top: 8px; }
+
+  .resultCount { font-size: 12.5px; color: #667; margin: 4px 2px 10px; }
+
+  .card {
+    background: #fff; border-radius: 12px; padding: 14px 16px; margin-bottom: 10px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.08); border-left: 5px solid #ccc;
+  }
+  .card.risco-alto { border-left-color: #d1372e; }
+  .card.risco-medio { border-left-color: #d19a00; }
+  .card.risco-baixo { border-left-color: #2a9d4a; }
+
+  .card .nome { font-size: 16.5px; font-weight: bold; margin-bottom: 6px; }
+  .card .linha { font-size: 13.5px; color: #334; margin-bottom: 3px; line-height: 1.4; }
+  .card .similar { font-size: 11px; color: #a8241c; font-weight: bold; margin-bottom: 4px; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+  .stat { background: #f6f7fa; border-radius: 8px; padding: 8px 10px; }
+  .stat .rotulo { font-size: 10.5px; color: #778; font-weight: bold; text-transform: uppercase; }
+  .stat .valor { font-size: 14.5px; font-weight: bold; color: #1a1a2e; }
+  .stat.q-boa .valor { color: #1c7a37; }
+  .stat.q-media .valor { color: #8a6300; }
+  .stat.q-ruim .valor { color: #a8241c; }
+
+  .divida {
+    margin-top: 10px; padding: 10px 12px; border-radius: 8px; font-size: 14.5px; font-weight: 700;
+  }
+  .divida.ok { background: #eaf7ee; color: #1c7a37; }
+  .divida.atencao { background: #fff3d6; color: #8a6300; }
+  .divida.risco { background: #fbe7e5; color: #a8241c; }
+
+  .semResultado {
+    background: #fff; border-radius: 12px; padding: 24px 18px; text-align: center;
+    box-shadow: 0 1px 4px rgba(0,0,0,.08);
+  }
+  .semResultado.novo { border-top: 4px solid #2a9d4a; }
+  .semResultado .titulo { font-size: 16px; font-weight: bold; margin-bottom: 6px; }
+  .semResultado .sub { font-size: 13px; color: #667; }
+
+  .vazio { text-align: center; color: #99a; font-size: 13px; padding: 30px 0; }
+  .carregando { text-align: center; color: #99a; font-size: 13px; padding: 30px 0; }
+
+  footer { text-align: center; padding: 20px; color: #99a; font-size: 11px; }
+</style>
+</head>
+<body>
+
+<div id="gateLogin">
+  <div class="titulo">Aliança Comércio — Acesso Restrito</div>
+  <div class="sub">Consulta de cadastro de clientes.</div>
+  <input id="inputEmail" type="email" placeholder="E-mail" autocomplete="username" autofocus>
+  <input id="inputSenha" type="password" placeholder="Senha" autocomplete="current-password">
+  <button id="btnEntrar">Entrar</button>
+  <a id="linkEsqueciSenha" href="#">Esqueci minha senha</a>
+  <div id="erroLogin"></div>
+  <div id="msgReset"></div>
+</div>
+
+<div id="gateNovaSenha">
+  <div class="titulo">Criar senha nova</div>
+  <div class="sub">Digite a nova senha que você vai usar daqui pra frente.</div>
+  <input id="inputNovaSenha" type="password" placeholder="Senha nova (mín. 6 caracteres)" autocomplete="new-password">
+  <button id="btnSalvarNovaSenha">Salvar senha nova</button>
+  <div id="erroNovaSenha"></div>
+</div>
+
+<div id="conteudo">
+  <div id="offlineAviso">📴 Sem internet — usando dados salvos no celular</div>
+  <header>
+    <h1>Consulta de Cliente</h1>
+    <div class="meta">Aliança Comércio · dados de <span id="dataGerado"></span></div>
+  </header>
+  <main>
+    <div class="searchBox">
+      <label>Buscar por</label>
+      <div class="modos">
+        <button type="button" data-modo="cpf" class="ativo">CPF</button>
+        <button type="button" data-modo="nome">Nome</button>
+        <button type="button" data-modo="endereco">Endereço</button>
+      </div>
+      <input id="busca" type="text" inputmode="numeric" placeholder="Digite o CPF" autocomplete="off">
+      <div class="hint" id="hintBusca">Pode digitar com ou sem pontuação.</div>
+    </div>
+    <div id="resultados"><div class="carregando">Carregando dados...</div></div>
+  </main>
+  <footer>Uso interno — não compartilhar o link ou a senha.</footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="login-gate.js"></script>
+<script>
+(function(){
+  function atualizaStatusRede() {
+    document.body.classList.toggle('offline', !navigator.onLine);
+  }
+  window.addEventListener('online', atualizaStatusRede);
+  window.addEventListener('offline', atualizaStatusRede);
+  atualizaStatusRede();
+
+  var DATA = [];
+  var CACHE_CHAVE = 'consultaClienteCacheV1';
+
+  function soDigitos(s) { return (s||'').replace(/\D/g,''); }
+  function normaliza(s) {
+    return (s||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();
+  }
+
+  function prepararDados(lista) {
+    lista.forEach(function(c){
+      c._nomeN = normaliza(c.nome);
+      c._endN = normaliza([c.end, c.bairro, c.cidade].filter(Boolean).join(' '));
+    });
+    return lista;
+  }
+
+  // Converte o formato do Supabase (snake_case) pro mesmo formato que a busca já
+  // usava (mesma lógica de sempre, só troca de onde o dado vem).
+  function converterLinha(r) {
+    return {
+      cod: r.cod, nome: r.nome, cpf: r.cpf, end: r.endereco, num: r.numero,
+      bairro: r.bairro, cidade: r.cidade, tel: r.telefone,
+      devQtd: r.dev_qtd, devVlr: Number(r.dev_vlr), devDias: r.dev_dias,
+      qtdCompras: r.qtd_compras,
+      ultimaCompra: r.ultima_compra ? r.ultima_compra.split('-').reverse().join('/') : null,
+      qualidade: r.qualidade,
+    };
+  }
+
+  async function carregarDados(db) {
+    var TAMANHO_PAGINA = 1000;
+    var todos = [];
+    var pagina = 0;
+    try {
+      while (true) {
+        var de = pagina * TAMANHO_PAGINA;
+        var ate = de + TAMANHO_PAGINA - 1;
+        var resp = await db.from('consulta_clientes').select('*').range(de, ate);
+        if (resp.error) throw resp.error;
+        var linhas = resp.data || [];
+        todos = todos.concat(linhas.map(converterLinha));
+        if (linhas.length < TAMANHO_PAGINA) break;
+        pagina++;
+      }
+      DATA = prepararDados(todos);
+      localStorage.setItem(CACHE_CHAVE, JSON.stringify({ dados: todos, geradoEm: new Date().toLocaleDateString('pt-BR') }));
+      document.getElementById('dataGerado').textContent = new Date().toLocaleDateString('pt-BR');
+      document.getElementById('resultados').innerHTML = '<div class="vazio">Digite pra começar a buscar.</div>';
+    } catch (err) {
+      var cache = localStorage.getItem(CACHE_CHAVE);
+      if (cache) {
+        var obj = JSON.parse(cache);
+        DATA = prepararDados(obj.dados);
+        document.getElementById('dataGerado').textContent = obj.geradoEm + ' (offline)';
+        document.getElementById('resultados').innerHTML = '<div class="vazio">Digite pra começar a buscar.</div>';
+      } else {
+        document.getElementById('resultados').innerHTML = '<div class="semResultado"><div class="titulo">Sem conexão e sem dados salvos</div><div class="sub">Conecte à internet pelo menos uma vez pra usar offline depois.</div></div>';
+      }
+    }
+  }
+
+  function classeRisco(c) {
+    if (c.devQtd > 0 && c.devDias > 60) return 'risco-alto';
+    if (c.devQtd > 0) return 'risco-medio';
+    if (c.qualidade !== null && c.qualidade < 50) return 'risco-medio';
+    return 'risco-baixo';
+  }
+
+  function classeQualidade(q) {
+    if (q === null) return '';
+    if (q >= 70) return 'q-boa';
+    if (q >= 40) return 'q-media';
+    return 'q-ruim';
+  }
+
+  function cardHtml(c, mostrarSimilar) {
+    var enderecoCompleto = [c.end, c.num, c.bairro].filter(Boolean).join(', ');
+
+    var dividaHtml;
+    if (c.devQtd > 0) {
+      var vlrFmt = c.devVlr.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2});
+      var nivel = c.devDias > 60 ? 'risco' : 'atencao';
+      var diasTxt = c.devDias > 0 ? (' · ' + c.devDias + ' dias em aberto') : '';
+      dividaHtml = '<div class="divida ' + nivel + '">💰 DEVE — R$ ' + vlrFmt + diasTxt + '</div>';
+    } else {
+      dividaHtml = '<div class="divida ok">✓ NÃO DEVE</div>';
+    }
+
+    var qClasse = classeQualidade(c.qualidade);
+    var qTxt = c.qualidade !== null ? (c.qualidade + '%') : '—';
+
+    return '' +
+      '<div class="card ' + classeRisco(c) + '">' +
+        (mostrarSimilar ? '<div class="similar">Parecido com o que você digitou:</div>' : '') +
+        '<div class="nome">' + (c.nome||'').trim() + '</div>' +
+        '<div class="linha">' + (enderecoCompleto || 'Endereço não cadastrado') + '</div>' +
+        dividaHtml +
+        '<div class="grid2">' +
+          '<div class="stat"><div class="rotulo">Última compra</div><div class="valor">' + (c.ultimaCompra || '—') + '</div></div>' +
+          '<div class="stat"><div class="rotulo">Qtd. compras</div><div class="valor">' + (c.qtdCompras || 0) + '</div></div>' +
+          '<div class="stat ' + qClasse + '" style="grid-column: 1 / -1;"><div class="rotulo">Qualidade de pagamento</div><div class="valor">' + qTxt + '</div></div>' +
+        '</div>' +
+      '</div>';
+  }
+
+  function levenshtein(a, b) {
+    if (a === b) return 0;
+    var la = a.length, lb = b.length;
+    if (la === 0) return lb;
+    if (lb === 0) return la;
+    var prev = new Array(lb + 1);
+    for (var j = 0; j <= lb; j++) prev[j] = j;
+    for (var i = 1; i <= la; i++) {
+      var cur = [i];
+      for (var j2 = 1; j2 <= lb; j2++) {
+        var custo = a[i-1] === b[j2-1] ? 0 : 1;
+        cur[j2] = Math.min(prev[j2] + 1, cur[j2-1] + 1, prev[j2-1] + custo);
+      }
+      prev = cur;
+    }
+    return prev[lb];
+  }
+
+  function menorDistanciaPalavra(w, textoN) {
+    var palavras = textoN.split(' ').filter(Boolean);
+    var melhor = 99;
+    for (var i = 0; i < palavras.length; i++) {
+      var p = palavras[i];
+      if (Math.abs(p.length - w.length) > melhor) continue;
+      var d = levenshtein(w, p);
+      if (d < melhor) melhor = d;
+    }
+    return melhor;
+  }
+
+  function scoreAproximado(termoN, c, campo) {
+    var palavrasTermo = termoN.split(' ').filter(Boolean);
+    var total = 0;
+    for (var i = 0; i < palavrasTermo.length; i++) {
+      var w = palavrasTermo[i];
+      var melhorPalavra = menorDistanciaPalavra(w, c[campo]);
+      var tolerancia = w.length <= 4 ? 1 : (w.length <= 8 ? 2 : 3);
+      if (melhorPalavra > tolerancia) return null;
+      total += melhorPalavra;
+    }
+    return total;
+  }
+
+  var MODOS = {
+    cpf: { label: 'CPF', placeholder: 'Digite o CPF', hint: 'Pode digitar com ou sem pontuação.', inputmode: 'numeric' },
+    nome: { label: 'Nome', placeholder: 'Digite o nome do cliente', hint: 'Se errar a digitação, mostra os mais parecidos.', inputmode: 'text' },
+    endereco: { label: 'Endereço', placeholder: 'Digite a rua, bairro ou cidade', hint: 'Se errar a digitação, mostra os mais parecidos.', inputmode: 'text' },
+  };
+  var modoAtual = 'cpf';
+  var buscaInput = document.getElementById('busca');
+  var hintEl = document.getElementById('hintBusca');
+
+  document.querySelectorAll('.modos button').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      document.querySelectorAll('.modos button').forEach(function(b){ b.classList.remove('ativo'); });
+      btn.classList.add('ativo');
+      modoAtual = btn.getAttribute('data-modo');
+      var m = MODOS[modoAtual];
+      buscaInput.placeholder = m.placeholder;
+      buscaInput.setAttribute('inputmode', m.inputmode);
+      hintEl.textContent = m.hint;
+      buscaInput.value = '';
+      buscaInput.focus();
+      buscar('');
+    });
+  });
+
+  function buscarPorCpf(termo, el) {
+    var digitos = soDigitos(termo);
+    if (digitos.length < 3) { el.innerHTML = '<div class="vazio">Continue digitando o CPF.</div>'; return; }
+
+    var achados = DATA.filter(function(c){ return c.cpf && c.cpf.indexOf(digitos) === 0; });
+    if (achados.length === 0) {
+      if (digitos.length === 11) {
+        el.innerHTML = '<div class="semResultado novo">' +
+          '<div class="titulo">✓ CPF não encontrado na base</div>' +
+          '<div class="sub">Esse CPF nunca comprou da Aliança — cliente novo, sem histórico registrado.</div>' +
+        '</div>';
+      } else {
+        el.innerHTML = '<div class="semResultado"><div class="titulo">Nenhum resultado</div><div class="sub">Continue digitando o CPF.</div></div>';
+      }
+      return;
+    }
+    el.innerHTML = '<div class="resultCount">' + achados.length + ' resultado(s)</div>' + achados.slice(0,25).map(function(c){return cardHtml(c,false);}).join('');
+  }
+
+  function buscarPorTexto(termo, el, campo) {
+    var termoN = normaliza(termo);
+
+    var diretos = DATA.filter(function(c){ return c[campo].indexOf(termoN) >= 0; });
+
+    if (diretos.length > 0) {
+      var html = '<div class="resultCount">' + diretos.length + ' resultado(s)' + (diretos.length > 25 ? ' — mostrando os 25 primeiros, refine a busca' : '') + '</div>';
+      html += diretos.slice(0, 25).map(function(c){return cardHtml(c,false);}).join('');
+      el.innerHTML = html;
+      return;
+    }
+
+    if (termoN.length >= 4) {
+      var candidatos = [];
+      for (var i = 0; i < DATA.length; i++) {
+        var s = scoreAproximado(termoN, DATA[i], campo);
+        if (s !== null) candidatos.push({ c: DATA[i], score: s });
+      }
+      if (candidatos.length > 0) {
+        candidatos.sort(function(a,b){ return a.score - b.score; });
+        var html2 = '<div class="resultCount">Nenhum resultado exato — mostrando ' + Math.min(candidatos.length,10) + ' mais parecido(s)</div>';
+        html2 += candidatos.slice(0, 10).map(function(x){ return cardHtml(x.c, true); }).join('');
+        el.innerHTML = html2;
+        return;
+      }
+    }
+
+    el.innerHTML = '<div class="semResultado"><div class="titulo">Nenhum resultado</div>' +
+      '<div class="sub">Confira a digitação e tente de novo.</div></div>';
+  }
+
+  function buscar(termo) {
+    var el = document.getElementById('resultados');
+    termo = (termo || '').trim();
+    if (!termo) { el.innerHTML = '<div class="vazio">Digite pra começar a buscar.</div>'; return; }
+
+    if (modoAtual === 'cpf') { buscarPorCpf(termo, el); return; }
+    if (modoAtual === 'nome') { buscarPorTexto(termo, el, '_nomeN'); return; }
+    buscarPorTexto(termo, el, '_endN');
+  }
+
+  var timer = null;
+  buscaInput.addEventListener('input', function(){
+    clearTimeout(timer);
+    timer = setTimeout(function(){ buscar(buscaInput.value); }, 150);
+  });
+
+  iniciarLoginGate(function(){
+    carregarDados(window.dbAuth);
+  });
+})();
+</script>
+</body>
+</html>
