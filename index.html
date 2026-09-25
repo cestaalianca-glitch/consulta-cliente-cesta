@@ -202,21 +202,38 @@
   }
 
   async function carregarDados(db) {
-    var TAMANHO_PAGINA = 2000; // menos idas-e-voltas que 1000 (fica bem mais rápido pra carregar as ~23,5 mil linhas)
+    // Pede 2000 por vez, mas o Supabase pode responder menos (o projeto tem um teto
+    // de linhas por requisição configurado no servidor — descoberto em 25/09/2026:
+    // pedia 2000 e vinha só 1000, e o código antigo achava "recebi menos que pedi,
+    // deve ser a última página" e parava aí, carregando só os primeiros ~1000
+    // clientes de 23,5 mil. Por isso NÃO usar "recebeu menos que pediu" como sinal
+    // de fim — usar o total real que o Supabase informa (count: 'exact') e só parar
+    // quando já tiver carregado esse total, não importa quantas páginas isso leve.
+    var TAMANHO_PAGINA = 2000;
     var todos = [];
-    var pagina = 0;
+    var de = 0; // avança pelo que REALMENTE voltou, não pelo tamanho pedido — o
+                // Supabase pode responder menos do que TAMANHO_PAGINA (ver nota acima),
+                // e pedir a próxima página a partir de "de + TAMANHO_PAGINA" nesse caso
+                // pularia registros no meio sem ninguém perceber.
+    var totalNoServidor = null;
     document.getElementById('dataGerado').textContent = 'carregando...';
     buscaInput.disabled = true; // trava a busca até o dado terminar de carregar (evita buscar em base vazia/parcial)
     try {
       while (true) {
-        var de = pagina * TAMANHO_PAGINA;
         var ate = de + TAMANHO_PAGINA - 1;
-        var resp = await db.from('consulta_clientes').select('*').range(de, ate);
+        var resp = await db.from('consulta_clientes').select('*', { count: 'exact' }).range(de, ate);
         if (resp.error) throw resp.error;
+        if (typeof resp.count === 'number') totalNoServidor = resp.count;
         var linhas = resp.data || [];
         todos = todos.concat(linhas.map(converterLinha));
-        if (linhas.length < TAMANHO_PAGINA) break;
-        pagina++;
+        // Só considera terminado quando já tem o total real (ou, por segurança, se
+        // uma página vier vazia — evita loop infinito caso o total nunca bata).
+        if (linhas.length === 0) break;
+        de += linhas.length;
+        if (totalNoServidor !== null && todos.length >= totalNoServidor) break;
+      }
+      if (totalNoServidor !== null && todos.length < totalNoServidor) {
+        throw new Error('Carregou só ' + todos.length + ' de ' + totalNoServidor + ' clientes — parando antes de mostrar base incompleta.');
       }
       DATA = prepararDados(todos);
       localStorage.setItem(CACHE_CHAVE, JSON.stringify({ dados: todos, geradoEm: new Date().toLocaleDateString('pt-BR') }));
