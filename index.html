@@ -210,29 +210,36 @@
     // de fim — usar o total real que o Supabase informa (count: 'exact') e só parar
     // quando já tiver carregado esse total, não importa quantas páginas isso leve.
     var TAMANHO_PAGINA = 2000;
-    var todos = [];
-    var de = 0; // avança pelo que REALMENTE voltou, não pelo tamanho pedido — o
-                // Supabase pode responder menos do que TAMANHO_PAGINA (ver nota acima),
-                // e pedir a próxima página a partir de "de + TAMANHO_PAGINA" nesse caso
-                // pularia registros no meio sem ninguém perceber.
-    var totalNoServidor = null;
     document.getElementById('dataGerado').textContent = 'carregando...';
     buscaInput.disabled = true; // trava a busca até o dado terminar de carregar (evita buscar em base vazia/parcial)
     try {
-      while (true) {
-        var ate = de + TAMANHO_PAGINA - 1;
-        var resp = await db.from('consulta_clientes').select('*', { count: 'exact' }).range(de, ate);
-        if (resp.error) throw resp.error;
-        if (typeof resp.count === 'number') totalNoServidor = resp.count;
-        var linhas = resp.data || [];
-        todos = todos.concat(linhas.map(converterLinha));
-        // Só considera terminado quando já tem o total real (ou, por segurança, se
-        // uma página vier vazia — evita loop infinito caso o total nunca bata).
-        if (linhas.length === 0) break;
-        de += linhas.length;
-        if (totalNoServidor !== null && todos.length >= totalNoServidor) break;
+      // 1ª página: pede o total real junto (count: 'exact'), e repara quantas linhas
+      // o servidor DEVOLVEU de fato (pode ser menos que TAMANHO_PAGINA — ver nota
+      // acima). Isso dá o tamanho real de página pra calcular o resto de uma vez.
+      var primeira = await db.from('consulta_clientes').select('*', { count: 'exact' }).range(0, TAMANHO_PAGINA - 1);
+      if (primeira.error) throw primeira.error;
+      var totalNoServidor = primeira.count;
+      var tamanhoRealDaPagina = (primeira.data || []).length;
+      var todosPorPagina = [primeira.data || []];
+
+      // Resto das páginas: já sei o total e o tamanho real de cada uma, então dá
+      // pra calcular todos os offsets de uma vez e buscar em PARALELO em vez de
+      // esperar uma terminar pra pedir a próxima (era isso que deixava lento: 25
+      // idas-e-voltas em fila, ~37s no total só pra abrir a tela).
+      if (tamanhoRealDaPagina > 0 && totalNoServidor > tamanhoRealDaPagina) {
+        var pedidos = [];
+        for (var de = tamanhoRealDaPagina; de < totalNoServidor; de += tamanhoRealDaPagina) {
+          pedidos.push(db.from('consulta_clientes').select('*').range(de, de + tamanhoRealDaPagina - 1));
+        }
+        var respostas = await Promise.all(pedidos);
+        for (var i = 0; i < respostas.length; i++) {
+          if (respostas[i].error) throw respostas[i].error;
+          todosPorPagina.push(respostas[i].data || []);
+        }
       }
-      if (totalNoServidor !== null && todos.length < totalNoServidor) {
+
+      var todos = [].concat.apply([], todosPorPagina).map(converterLinha);
+      if (typeof totalNoServidor === 'number' && todos.length < totalNoServidor) {
         throw new Error('Carregou só ' + todos.length + ' de ' + totalNoServidor + ' clientes — parando antes de mostrar base incompleta.');
       }
       DATA = prepararDados(todos);
