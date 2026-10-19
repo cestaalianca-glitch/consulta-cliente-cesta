@@ -46,6 +46,17 @@
   }
   header h1 { font-size: 16px; margin: 0 0 2px; }
   header .meta { font-size: 11px; color: #b8c0d8; }
+  header .linha { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  #btnAtualizar {
+    font: inherit; font-size: 12px; font-weight: bold; padding: 8px 12px; border-radius: 99px; border: 1px solid #3a4a78;
+    background: transparent; color: #fff; white-space: nowrap; cursor: pointer;
+  }
+  #btnAtualizar:disabled { color: #b8c0d8; cursor: default; }
+  #btnAtualizar .gira { display: inline-block; animation: gira 1.2s linear infinite; }
+  @keyframes gira { to { transform: rotate(360deg); } }
+  #avisoAtualizacao { display: none; font-size: 12px; font-weight: bold; padding: 8px 16px; text-align: center; }
+  #avisoAtualizacao.velho { display: block; background: #d03b3b; color: #fff; }
+  #avisoAtualizacao.info { display: block; background: #e8edf8; color: #0d1b40; font-weight: normal; }
 
   #offlineAviso {
     display: none; background: #8a6300; color: #fff; text-align: center;
@@ -141,9 +152,15 @@
 <div id="conteudo">
   <div id="offlineAviso">📴 Sem internet — usando dados salvos no celular</div>
   <header>
-    <h1>Consulta de Cliente</h1>
-    <div class="meta">Aliança Comércio · dados de <span id="dataGerado"></span></div>
+    <div class="linha">
+      <div>
+        <h1>Consulta de Cliente</h1>
+        <div class="meta">Aliança Comércio · dados de <span id="dataGerado"></span></div>
+      </div>
+      <button type="button" id="btnAtualizar" disabled>↻ Atualizar</button>
+    </div>
   </header>
+  <div id="avisoAtualizacao"></div>
   <main>
     <div class="searchBox">
       <label>Buscar por</label>
@@ -238,20 +255,24 @@
         }
       }
 
-      var todos = [].concat.apply([], todosPorPagina).map(converterLinha);
+      var brutos = [].concat.apply([], todosPorPagina);
+      // 19/10/2026: "dados de" mostrava a data em que o CELULAR abriu a página — de 16 a 19/10 o robô
+      // ficou parado e a tela seguia dizendo "hoje". Agora é a hora da última atualização de verdade.
+      var atualizadoEm = brutos.reduce(function(m, r){ return r.atualizado_em && r.atualizado_em > m ? r.atualizado_em : m; }, '');
+      var todos = brutos.map(converterLinha);
       if (typeof totalNoServidor === 'number' && todos.length < totalNoServidor) {
         throw new Error('Carregou só ' + todos.length + ' de ' + totalNoServidor + ' clientes — parando antes de mostrar base incompleta.');
       }
       DATA = prepararDados(todos);
-      localStorage.setItem(CACHE_CHAVE, JSON.stringify({ dados: todos, geradoEm: new Date().toLocaleDateString('pt-BR') }));
-      document.getElementById('dataGerado').textContent = new Date().toLocaleDateString('pt-BR');
+      try { localStorage.setItem(CACHE_CHAVE, JSON.stringify({ dados: todos, atualizadoEm: atualizadoEm })); } catch (e) {}
+      mostrarDataDados(atualizadoEm, false);
       document.getElementById('resultados').innerHTML = '<div class="vazio">Digite pra começar a buscar.</div>';
     } catch (err) {
       var cache = localStorage.getItem(CACHE_CHAVE);
       if (cache) {
         var obj = JSON.parse(cache);
         DATA = prepararDados(obj.dados);
-        document.getElementById('dataGerado').textContent = obj.geradoEm + ' (offline)';
+        mostrarDataDados(obj.atualizadoEm || '', true);
         document.getElementById('resultados').innerHTML = '<div class="vazio">Digite pra começar a buscar.</div>';
       } else {
         document.getElementById('resultados').innerHTML = '<div class="semResultado"><div class="titulo">Sem conexão e sem dados salvos</div><div class="sub">Conecte à internet pelo menos uma vez pra usar offline depois.</div></div>';
@@ -431,6 +452,74 @@
     buscarPorTexto(termo, el, '_endN');
   }
 
+  // ---------- Data dos dados + botão Atualizar (19/10/2026) ----------
+  var HORAS_DADO_VELHO = 30; // a rotina roda todo dia; mais que isso = robô parado
+  var aviso = document.getElementById('avisoAtualizacao');
+  var btnAtualizar = document.getElementById('btnAtualizar');
+  function hora(iso) { return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); }
+  function diaHora(iso) {
+    var d = new Date(iso);
+    var dia = new Date().toDateString() === d.toDateString() ? 'hoje' : d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+    return dia + ' às ' + hora(iso);
+  }
+  function mostrarAviso(tipo, texto) { aviso.className = tipo || ''; aviso.textContent = texto || ''; }
+  function mostrarDataDados(iso, offline) {
+    document.getElementById('dataGerado').textContent = (iso ? diaHora(iso) : '—') + (offline ? ' (offline)' : '');
+    if (iso && (Date.now() - new Date(iso).getTime()) / 3600000 > HORAS_DADO_VELHO) {
+      mostrarAviso('velho', '⚠ Dados de ' + diaHora(iso) + ' — podem estar desatualizados. Aperte ↻ Atualizar; se não resolver, avise o escritório.');
+    } else if (aviso.className === 'velho') mostrarAviso('', '');
+  }
+
+  var acompanhando = null, pedidoEm = 0;
+  function chamarAtualizacao(acao) {
+    return window.dbAuth.functions.invoke('atualizar-opy', { body: { acao: acao, alvo: 'consulta' } }).then(function(r){
+      if (r.error) { var e = new Error(r.error.message); e.status = r.error.context && r.error.context.status; throw e; }
+      return r.data;
+    });
+  }
+  function pintarBotao(html, desabilitado) { btnAtualizar.innerHTML = html; btnAtualizar.disabled = !!desabilitado; }
+  function pararAcompanhar() { clearInterval(acompanhando); acompanhando = null; }
+  function acompanhar() {
+    if (acompanhando) return;
+    acompanhando = setInterval(function(){
+      chamarAtualizacao('estado').then(function(r){ verEstado(r.ultima, true); }).catch(function(){});
+    }, 10000);
+  }
+  function verEstado(u, depoisDePedir) {
+    if (pedidoEm && (!u || new Date(u.inicio).getTime() < pedidoEm - 60000)) { pintarBotao('<span class="gira">↻</span> Começando…', true); acompanhar(); return; }
+    if (u && u.status !== 'completed') {
+      pintarBotao('<span class="gira">↻</span> Atualizando…', true);
+      mostrarAviso('info', 'Buscando no Opy (começou ' + hora(u.inicio) + ', leva uns 4 min). Pode continuar consultando.');
+      acompanhar(); return;
+    }
+    pararAcompanhar();
+    pintarBotao('↻ Atualizar', false);
+    if (!depoisDePedir || !u) return;
+    pedidoEm = 0;
+    if (u.conclusao === 'success') { mostrarAviso('info', '✓ Atualizado ' + diaHora(u.fim) + '.'); carregarDados(window.dbAuth).then(function(){ if (buscaInput.value) buscar(buscaInput.value); }); }
+    else mostrarAviso('velho', '⚠ A atualização não deu certo. Avise o escritório (pode ser o login do robô no Opy).');
+  }
+  btnAtualizar.addEventListener('click', function(){
+    pintarBotao('<span class="gira">↻</span> Pedindo…', true);
+    chamarAtualizacao('disparar').then(function(r){
+      if (r.recente) {
+        var min = Math.max(1, Math.round((Date.now() - new Date(r.ultima.fim).getTime()) / 60000));
+        mostrarAviso('info', 'Já foi atualizado há ' + min + ' min (' + hora(r.ultima.fim) + '). Pode buscar — o dado está novo.');
+        pintarBotao('↻ Atualizar', false); return;
+      }
+      if (r.jaRodando) { verEstado(r.ultima, true); return; }
+      pedidoEm = new Date(r.em).getTime();
+      verEstado(null, true);
+    }).catch(function(){
+      pintarBotao('↻ Atualizar', false);
+      mostrarAviso('velho', '⚠ Não consegui pedir a atualização. Confira a internet e tente de novo.');
+    });
+  });
+  function iniciarBotao() {
+    chamarAtualizacao('estado').then(function(r){ verEstado(r.ultima, false); })
+      .catch(function(e){ if (e.status === 401 || e.status === 403) btnAtualizar.style.display = 'none'; else pintarBotao('↻ Atualizar', false); });
+  }
+
   var timer = null;
   buscaInput.addEventListener('input', function(){
     clearTimeout(timer);
@@ -439,6 +528,7 @@
 
   iniciarLoginGate(function(){
     carregarDados(window.dbAuth);
+    iniciarBotao();
   });
 })();
 </script>
