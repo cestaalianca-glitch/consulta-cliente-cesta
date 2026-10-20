@@ -192,6 +192,34 @@
   var DATA = [];
   var CACHE_CHAVE = 'consultaClienteCacheV1';
 
+  // Cópia dos dados no aparelho pra usar sem internet (20/10/2026). Era localStorage, que tem ~5 MB por
+  // site e é dividido com o Painel e a Central (mesmo endereço github.io) — os 23 mil clientes ficavam no
+  // limite e a cópia podia não ser salva. IndexedDB guarda bem mais. Lê o localStorage antigo se existir.
+  function abrirBanco() {
+    return new Promise(function(ok, falha){
+      var req = indexedDB.open('consultaCliente', 1);
+      req.onupgradeneeded = function(){ req.result.createObjectStore('cache'); };
+      req.onsuccess = function(){ ok(req.result); };
+      req.onerror = function(){ falha(req.error); };
+    });
+  }
+  function salvarCopia(obj) {
+    return abrirBanco().then(function(db){ return new Promise(function(ok, falha){
+      var tx = db.transaction('cache', 'readwrite'); tx.objectStore('cache').put(obj, 'dados');
+      tx.oncomplete = function(){ ok(); }; tx.onerror = function(){ falha(tx.error); };
+    }); }).then(function(){ try { localStorage.removeItem(CACHE_CHAVE); } catch (e) {} })
+      .catch(function(){ /* sem espaço: segue sem cópia offline */ });
+  }
+  function lerCopia() {
+    return abrirBanco().then(function(db){ return new Promise(function(ok){
+      var req = db.transaction('cache').objectStore('cache').get('dados');
+      req.onsuccess = function(){ ok(req.result || null); }; req.onerror = function(){ ok(null); };
+    }); }).catch(function(){ return null; }).then(function(obj){
+      if (obj) return obj;
+      try { var antigo = localStorage.getItem(CACHE_CHAVE); return antigo ? JSON.parse(antigo) : null; } catch (e) { return null; }
+    });
+  }
+
   function soDigitos(s) { return (s||'').replace(/\D/g,''); }
   function normaliza(s) {
     return (s||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();
@@ -260,17 +288,18 @@
       // ficou parado e a tela seguia dizendo "hoje". Agora é a hora da última atualização de verdade.
       var atualizadoEm = brutos.reduce(function(m, r){ return r.atualizado_em && r.atualizado_em > m ? r.atualizado_em : m; }, '');
       var todos = brutos.map(converterLinha);
+      // Sem sessão válida o banco responde "0 clientes" em vez de erro — nunca trocar a cópia boa por isso.
+      if (todos.length < 1000) throw new Error('Servidor devolveu só ' + todos.length + ' clientes (sessão vencida?) — usando a cópia do aparelho.');
       if (typeof totalNoServidor === 'number' && todos.length < totalNoServidor) {
         throw new Error('Carregou só ' + todos.length + ' de ' + totalNoServidor + ' clientes — parando antes de mostrar base incompleta.');
       }
       DATA = prepararDados(todos);
-      try { localStorage.setItem(CACHE_CHAVE, JSON.stringify({ dados: todos, atualizadoEm: atualizadoEm })); } catch (e) {}
+      salvarCopia({ dados: todos, atualizadoEm: atualizadoEm });
       mostrarDataDados(atualizadoEm, false);
       document.getElementById('resultados').innerHTML = '<div class="vazio">Digite pra começar a buscar.</div>';
     } catch (err) {
-      var cache = localStorage.getItem(CACHE_CHAVE);
-      if (cache) {
-        var obj = JSON.parse(cache);
+      var obj = await lerCopia();
+      if (obj && obj.dados && obj.dados.length) {
         DATA = prepararDados(obj.dados);
         mostrarDataDados(obj.atualizadoEm || '', true);
         document.getElementById('resultados').innerHTML = '<div class="vazio">Digite pra começar a buscar.</div>';
@@ -525,6 +554,8 @@
     clearTimeout(timer);
     timer = setTimeout(function(){ buscar(buscaInput.value); }, 150);
   });
+
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function(){});
 
   iniciarLoginGate(function(){
     carregarDados(window.dbAuth);

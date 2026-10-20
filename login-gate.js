@@ -23,12 +23,42 @@ function iniciarLoginGate(aoLiberar) {
     // Segundo argumento (token da sessão) é novo — passado pra quem quiser
     // buscar arquivo protegido por login (ver netlify/edge-functions/proteger-dados.js).
     // Callbacks antigos que só recebem (email) continuam funcionando normal.
+    // Marca que este aparelho já entrou com login de verdade (usado pra abrir sem internet, ver abaixo).
+    if (token) { try { localStorage.setItem('alAparelhoEmail', email || ''); } catch (e) {} }
     aoLiberar(email, token);
   }
 
   async function verificarSessao() {
-    var { data } = await db.auth.getSession();
-    if (data && data.session) liberar(data.session.user.email, data.session.access_token);
+    var data = null, erroDeRede = false;
+    try {
+      var r = await db.auth.getSession();
+      data = r.data;
+      if (r.error && /fetch|network|retryable/i.test((r.error.name || '') + ' ' + (r.error.message || ''))) erroDeRede = true;
+    } catch (e) { erroDeRede = true; }
+    if (data && data.session) { liberar(data.session.user.email, data.session.access_token); return; }
+    // 20/10/2026: sem internet, a sessão vencida não consegue ser renovada e a tela pedia e-mail e senha —
+    // que os vendedores não sabem (quem instala é o dono). Se ESTE aparelho já entrou antes, abre no modo
+    // offline com os dados salvos; quando a internet voltar, a página renova a sessão normalmente.
+    var salva = sessaoSalvaNoAparelho();
+    if (salva && (!navigator.onLine || erroDeRede)) {
+      liberar(salva, null);
+      window.addEventListener('online', function () { location.reload(); }, { once: true });
+    }
+  }
+
+  function sessaoSalvaNoAparelho() {
+    try {
+      var marca = localStorage.getItem('alAparelhoEmail');
+      if (marca) return marca;
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (!/^sb-.*-auth-token$/.test(k)) continue;
+        var s = JSON.parse(localStorage.getItem(k));
+        var u = s && (s.user || (s.currentSession && s.currentSession.user));
+        if (u && u.email) return u.email;
+      }
+    } catch (e) {}
+    return null;
   }
 
   async function tentarLogin() {
@@ -97,6 +127,7 @@ function iniciarLoginGate(aoLiberar) {
   var btnSair = document.getElementById('btnSair');
   if (btnSair) {
     btnSair.addEventListener('click', async function () {
+      try { localStorage.removeItem('alAparelhoEmail'); } catch (e) {}
       await db.auth.signOut();
       location.reload();
     });
