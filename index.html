@@ -155,7 +155,7 @@
     <div class="linha">
       <div>
         <h1>Consulta de Cliente</h1>
-        <div class="meta">Aliança Comércio · dados de <span id="dataGerado"></span></div>
+        <div class="meta">Aliança Comércio · dados de <span id="dataGerado"></span> · <a href="#" id="recarregarTudo">recarregar tudo</a></div>
       </div>
       <button type="button" id="btnAtualizar" disabled>↻ Atualizar</button>
     </div>
@@ -246,7 +246,46 @@
     };
   }
 
-  async function carregarDados(db) {
+  // (24/11/2026) Egress do Supabase estourou: só as colunas usadas e, quando há cópia no aparelho, baixa só o que mudou.
+  var COLUNAS = 'cod,nome,cpf,endereco,numero,bairro,cidade,telefone,dev_qtd,dev_vlr,dev_dias,qtd_compras,ultima_compra,qualidade,atualizado_em';
+
+  // Devolve true se atualizou pela diferença; false manda carregar tudo (cópia ausente, base mudou de tamanho, erro).
+  async function sincronizarPorDiferenca(db, copia) {
+    var cabeca = await db.from('consulta_clientes').select('cod', { count: 'exact', head: true });
+    if (cabeca.error || typeof cabeca.count !== 'number') return false;
+    var mudados = [], total = null;
+    for (var de = 0; ; de += 1000) {
+      var r = await db.from('consulta_clientes').select(COLUNAS, { count: 'exact' }).gte('atualizado_em', copia.atualizadoEm).order('cod').range(de, de + 999);
+      if (r.error) return false;
+      if (total === null) total = r.count;
+      if (typeof total !== 'number' || total > 5000) return false;
+      mudados = mudados.concat(r.data || []);
+      if (!r.data || !r.data.length || mudados.length >= total) break;
+    }
+    var porCod = {};
+    copia.dados.forEach(function(c){ porCod[c.cod] = c; });
+    mudados.forEach(function(m){ porCod[m.cod] = converterLinha(m); });
+    var lista = Object.keys(porCod).map(function(k){ return porCod[k]; });
+    if (lista.length < 1000 || lista.length !== cabeca.count) return false; // apagou/incluiu fora da conta: refaz tudo
+    var atualizadoEm = mudados.reduce(function(m, r){ return r.atualizado_em && r.atualizado_em > m ? r.atualizado_em : m; }, copia.atualizadoEm);
+    DATA = prepararDados(lista);
+    salvarCopia({ dados: lista, atualizadoEm: atualizadoEm, v: 2 });
+    mostrarDataDados(atualizadoEm, false);
+    document.getElementById('resultados').innerHTML = '<div class="vazio">Digite pra começar a buscar.</div>';
+    return true;
+  }
+
+  async function carregarDados(db, forcarTudo) {
+    var copia = forcarTudo ? null : await lerCopia();
+    if (copia && copia.dados && copia.dados.length >= 1000 && copia.atualizadoEm) {
+      document.getElementById('dataGerado').textContent = 'carregando...';
+      buscaInput.disabled = true;
+      try { if (await sincronizarPorDiferenca(db, copia)) { buscaInput.disabled = false; return; } } catch (e) { /* cai para a carga completa */ }
+    }
+    return carregarTudo(db);
+  }
+
+  async function carregarTudo(db) {
     // Pede 2000 por vez, mas o Supabase pode responder menos (o projeto tem um teto
     // de linhas por requisição configurado no servidor — descoberto em 25/09/2026:
     // pedia 2000 e vinha só 1000, e o código antigo achava "recebi menos que pedi,
@@ -261,7 +300,7 @@
       // 1ª página: pede o total real junto (count: 'exact'), e repara quantas linhas
       // o servidor DEVOLVEU de fato (pode ser menos que TAMANHO_PAGINA — ver nota
       // acima). Isso dá o tamanho real de página pra calcular o resto de uma vez.
-      var primeira = await db.from('consulta_clientes').select('*', { count: 'exact' }).range(0, TAMANHO_PAGINA - 1);
+      var primeira = await db.from('consulta_clientes').select(COLUNAS, { count: 'exact' }).range(0, TAMANHO_PAGINA - 1);
       if (primeira.error) throw primeira.error;
       var totalNoServidor = primeira.count;
       var tamanhoRealDaPagina = (primeira.data || []).length;
@@ -274,7 +313,7 @@
       if (tamanhoRealDaPagina > 0 && totalNoServidor > tamanhoRealDaPagina) {
         var pedidos = [];
         for (var de = tamanhoRealDaPagina; de < totalNoServidor; de += tamanhoRealDaPagina) {
-          pedidos.push(db.from('consulta_clientes').select('*').range(de, de + tamanhoRealDaPagina - 1));
+          pedidos.push(db.from('consulta_clientes').select(COLUNAS).range(de, de + tamanhoRealDaPagina - 1));
         }
         var respostas = await Promise.all(pedidos);
         for (var i = 0; i < respostas.length; i++) {
@@ -294,7 +333,7 @@
         throw new Error('Carregou só ' + todos.length + ' de ' + totalNoServidor + ' clientes — parando antes de mostrar base incompleta.');
       }
       DATA = prepararDados(todos);
-      salvarCopia({ dados: todos, atualizadoEm: atualizadoEm });
+      salvarCopia({ dados: todos, atualizadoEm: atualizadoEm, v: 2 });
       mostrarDataDados(atualizadoEm, false);
       document.getElementById('resultados').innerHTML = '<div class="vazio">Digite pra começar a buscar.</div>';
     } catch (err) {
@@ -558,6 +597,7 @@
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function(){});
 
   iniciarLoginGate(function(){
+    document.getElementById('recarregarTudo').addEventListener('click', function(e){ e.preventDefault(); carregarDados(window.dbAuth, true); });
     carregarDados(window.dbAuth);
     iniciarBotao();
   });
